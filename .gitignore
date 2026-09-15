@@ -1,0 +1,11 @@
+# Original Warcraft III / Miles Sound System DLL — do not redistribute
+mss32_miles.dll
+
+# Build leftovers
+src/*.obj
+src/*.exp
+src/*.lib
+src/*.pdb
+src/*.ilk
+.vs/
+*.user
