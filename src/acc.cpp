@@ -43,10 +43,16 @@ static volatile bool g_running = true;
 static bool g_chatOpen = false;
 static bool g_smoothOn = true;
 static bool g_loopEnabled = true;
+static int g_inWorldTicks = 0;
 static bool g_holdField[7];
 static float g_holdValue[7];
 static char g_chat[512];
 static int g_chatLen = 0;
+
+// 1.29.2.9231 data RVAs (preferred imagebase 0x400000).
+static const DWORD kRvaGameInst = 0xD3B6F4;   // 0x113B6F4, null in menu
+static const DWORD kRvaCamMgr = 0xD3D7F8;     // 0x113D7F8, camera singleton
+static const DWORD kCamPtrOff = 0x294;
 
 static void *Scan(HMODULE mod, const BYTE *sig, const char *mask, size_t len) {
     BYTE *base = (BYTE *)mod;
@@ -116,6 +122,44 @@ static bool ResolveNatives() {
     return true;
 }
 
+static bool IsInWorld() {
+    if (!g_game)
+        return false;
+    BYTE *base = (BYTE *)g_game;
+    __try {
+        DWORD inst = *(DWORD *)(base + kRvaGameInst);
+        if (inst < 0x10000)
+            return false;
+        WORD localId = *(WORD *)(inst + 0x28);
+        if (localId > 24)
+            return false;
+        DWORD mgr = *(DWORD *)(base + kRvaCamMgr);
+        if (mgr < 0x10000)
+            return false;
+        DWORD cam = *(DWORD *)(mgr + kCamPtrOff);
+        if (cam < 0x10000)
+            return false;
+        volatile DWORD probe = *(DWORD *)cam;
+        (void)probe;
+        probe = *(DWORD *)(cam + 0x5AC);
+        (void)probe;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool CanApplyCamera() {
+    if (!IsInWorld()) {
+        g_inWorldTicks = 0;
+        return false;
+    }
+    if (g_inWorldTicks < 4)
+        g_inWorldTicks++;
+    // Skip menu, loading, and the first ~2s after the world pointer appears.
+    return g_inWorldTicks >= 4;
+}
+
 static float BitsToFloat(DWORD bits) {
     float v;
     memcpy(&v, &bits, 4);
@@ -158,6 +202,8 @@ static void RememberField(int field, float value) {
 }
 
 static void ApplyHeld(float duration) {
+    if (!CanApplyCamera())
+        return;
     if (!g_setSmooth && !g_setField && !ResolveNatives())
         return;
     SetSmooth(g_smoothOn ? kSmoothOn : kSmoothOff);
