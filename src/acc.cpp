@@ -41,7 +41,10 @@ static HWND g_hwnd;
 static volatile bool g_running = true;
 
 static bool g_chatOpen = false;
-static bool g_smoothOn = false;
+static bool g_smoothOn = true;
+static bool g_loopEnabled = true;
+static bool g_holdField[7];
+static float g_holdValue[7];
 static char g_chat[512];
 static int g_chatLen = 0;
 
@@ -147,20 +150,32 @@ static void SetSmooth(float value) {
     }
 }
 
+static void RememberField(int field, float value) {
+    if (field < 0 || field > 6)
+        return;
+    g_holdField[field] = true;
+    g_holdValue[field] = value;
+}
+
+static void ApplyHeld(float duration) {
+    if (!g_setSmooth && !g_setField && !ResolveNatives())
+        return;
+    SetSmooth(g_smoothOn ? kSmoothOn : kSmoothOff);
+    for (int i = 0; i < 7; i++) {
+        if (g_holdField[i])
+            SetField(i, g_holdValue[i], duration);
+    }
+}
+
 static void ResetAll() {
-    SetField(FIELD_DISTANCE, kDefaultDistance, kDefaultDuration);
-    Sleep(10);
-    SetField(FIELD_AOA, kDefaultAoa, kDefaultDuration);
-    Sleep(10);
-    SetField(FIELD_FARZ, kDefaultFarz, kDefaultDuration);
-    Sleep(10);
-    SetField(FIELD_FOV, kDefaultFov, kDefaultDuration);
-    Sleep(10);
-    SetField(FIELD_ROLL, kDefaultRoll, kDefaultDuration);
-    Sleep(10);
-    SetField(FIELD_ROTATION, kDefaultRotation, kDefaultDuration);
-    Sleep(10);
-    SetField(FIELD_ZOFFSET, kDefaultZOffset, kDefaultDuration);
+    RememberField(FIELD_DISTANCE, kDefaultDistance);
+    RememberField(FIELD_AOA, kDefaultAoa);
+    RememberField(FIELD_FARZ, kDefaultFarz);
+    RememberField(FIELD_FOV, kDefaultFov);
+    RememberField(FIELD_ROLL, kDefaultRoll);
+    RememberField(FIELD_ROTATION, kDefaultRotation);
+    RememberField(FIELD_ZOFFSET, kDefaultZOffset);
+    ApplyHeld(kDefaultDuration);
 }
 
 static bool StartsWith(const char *s, const char *prefix) {
@@ -178,19 +193,18 @@ static bool AllDigits(const char *s) {
     return true;
 }
 
-static void ToggleSmooth() {
-    if (!g_setSmooth && !ResolveNatives())
-        return;
-    g_smoothOn = !g_smoothOn;
-    SetSmooth(g_smoothOn ? kSmoothOn : kSmoothOff);
+static void ToggleLoop() {
+    g_loopEnabled = !g_loopEnabled;
+    if (g_loopEnabled)
+        ApplyHeld(0.0f);
 }
 
 static void ApplyArg(const char *arg, int field, float defValue) {
-    if (!AllDigits(arg)) {
-        SetField(field, defValue, kDefaultDuration);
-        return;
-    }
-    SetField(field, (float)atof(arg), kDefaultDuration);
+    float value = defValue;
+    if (AllDigits(arg) && arg && *arg)
+        value = (float)atof(arg);
+    RememberField(field, value);
+    SetField(field, value, kDefaultDuration);
 }
 
 static void HandleCommand(const char *cmd) {
@@ -255,6 +269,7 @@ static void NudgeDistance(float delta) {
         cur = 250.0f;
     if (cur > 9900.0f)
         cur = 9900.0f;
+    RememberField(FIELD_DISTANCE, cur);
     SetField(FIELD_DISTANCE, cur, 0.0f);
 }
 
@@ -335,12 +350,13 @@ static LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
                 }
             } else {
                 if (vk == VK_F7)
-                    ToggleSmooth();
+                    ToggleLoop();
                 else if (vk == VK_ADD)
                     NudgeDistance(100.0f);
                 else if (vk == VK_SUBTRACT)
                     NudgeDistance(-100.0f);
                 else if (vk == VK_MULTIPLY) {
+                    RememberField(FIELD_DISTANCE, kDefaultDistance);
                     SetField(FIELD_DISTANCE, kDefaultDistance, 0.0f);
                 }
             }
@@ -369,8 +385,11 @@ static DWORD WINAPI Worker(LPVOID) {
 
     g_hook = SetWindowsHookExW(WH_KEYBOARD, KeyboardProc, NULL, threadId);
 
-    while (g_running)
+    while (g_running) {
+        if (g_loopEnabled)
+            ApplyHeld(0.0f);
         Sleep(500);
+    }
 
     if (g_hook)
         UnhookWindowsHookEx(g_hook);
